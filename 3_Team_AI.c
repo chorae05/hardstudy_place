@@ -685,8 +685,15 @@ static int get_counter_attack(int my_hp, int my_mp, int my_x, int my_y,
  * [PART 8] 3_Team 전투 AI - 강화된 공격형
  * ================================================================================================= */
 
+/* 독 상태 추적 전역 변수 */
+static int g_my_poison = 0;
+static int g_opp_is_poisoner = 0;
+static int g_last_my_hp = 5;
+
 static int my_ai(const Player* me, const Player* opp) {
-    // 기본 정보 수집
+    /* =====================================================================================
+     * [1] 모든 변수 완전 수집
+     * ===================================================================================== */
     int my_hp = get_player_hp(me);
     int my_mp = get_player_mp(me);
     int my_x = get_player_x(me);
@@ -699,8 +706,12 @@ static int my_ai(const Player* me, const Player* opp) {
 
     int hp_diff = my_hp - opp_hp;
     int mp_diff = my_mp - opp_mp;
+    int dx = opp_x - my_x;
+    int dy = opp_y - my_y;
+    int abs_dx = (dx < 0) ? -dx : dx;
+    int abs_dy = (dy < 0) ? -dy : dy;
 
-    // 스킬 해금 여부 확인 (모든 스킬)
+    // 모든 스킬
     int has_poison = is_skill_unlocked(MY_KEY, CMD_POISON);
     int has_strike = is_skill_unlocked(MY_KEY, CMD_STRIKE);
     int has_blink_u = is_skill_unlocked(MY_KEY, CMD_BLINK_UP);
@@ -710,202 +721,317 @@ static int my_ai(const Player* me, const Player* opp) {
     int has_heal_all = is_skill_unlocked(MY_KEY, CMD_HEAL_ALL);
     int has_range = is_skill_unlocked(MY_KEY, CMD_RANGE_ATTACK);
     int has_bless = is_skill_unlocked(MY_KEY, CMD_BLESS);
-    int has_h_attack = is_skill_unlocked(MY_KEY, CMD_H_ATTACK);
-    int has_v_attack = is_skill_unlocked(MY_KEY, CMD_V_ATTACK);
-    int has_any_blink = has_blink_u || has_blink_d || has_blink_l || has_blink_r;
+    int has_h = is_skill_unlocked(MY_KEY, CMD_H_ATTACK);
+    int has_v = is_skill_unlocked(MY_KEY, CMD_V_ATTACK);
+    int has_blink = has_blink_u || has_blink_d || has_blink_l || has_blink_r;
 
-    // 상대방 움직임 기록 업데이트
+    // 라인 조건
+    int same_row = (my_y == opp_y);
+    int same_col = (my_x == opp_x);
+    int h_line = (same_row && abs_dx >= 2);
+    int v_line = (same_col && abs_dy >= 2);
+
+    // 상대 기록 업데이트
     update_opponent_history(opp_x, opp_y, opp_hp, opp_mp, my_x, my_y);
+    int pred_x, pred_y;
+    predict_opponent_next_pos(opp_x, opp_y, &pred_x, &pred_y);
 
-    // 상대 다음 위치 예측
-    int pred_opp_x, pred_opp_y;
-    predict_opponent_next_pos(opp_x, opp_y, &pred_opp_x, &pred_opp_y);
+    // 독 감지: 공격 없이 HP 감소 = 독
+    if (my_hp < g_last_my_hp && dist > 1) {
+        g_my_poison = 2;
+    }
+    if (g_my_poison > 0) g_my_poison--;
+    g_last_my_hp = my_hp;
 
-    // 죽은 상태면 REST
+    // 상대가 독 플레이어인지 감지
+    if (opp_mp >= 5 || g_opp_is_poisoner) {
+        g_opp_is_poisoner = 1;
+    }
+
+    // 죽음
     if (my_hp <= 0) return CMD_REST;
 
     /* =====================================================================================
-     * PHASE 1: 즉시 킬각 판단 (대각선 vs 직선)
+     * [2] 독(POISON) 완벽 대응 - 최우선
      * ===================================================================================== */
-    KillAnalysis kill = analyze_kill_options(my_x, my_y, my_mp, opp_x, opp_y, opp_hp,
-                                              has_strike, has_range, has_h_attack, has_v_attack);
 
-    if (kill.can_kill && kill.moves_needed == 0) {
-        // 즉시 킬 가능!
-        return kill.cmd;
+    // 2-1. 내가 독 상태면 BLESS로 해독
+    if (g_my_poison > 0 && has_bless && my_mp >= 2 && my_hp <= 3) {
+        return CMD_BLESS;
     }
 
-    // 1턴 후 킬 가능: 먼저 이동
-    if (kill.can_kill && kill.moves_needed == 1 && kill.cmd != CMD_REST) {
-        return kill.cmd; // 이동 명령 반환
+    // 2-2. 상대 MP 5 이상 + 거리 1 = 독 위험! 선제 대응
+    if (opp_mp >= 5 && dist == 1) {
+        // 먼저 죽이기
+        if (opp_hp <= 1) return CMD_ATTACK;
+        if (opp_hp <= 2 && has_strike && my_mp >= 2) return CMD_STRIKE;
+        // BLINK 탈출
+        if (has_blink && my_mp >= 1) {
+            if (dx < 0 && my_x + 2 <= 7 && has_blink_r) return CMD_BLINK_RIGHT;
+            if (dx > 0 && my_x - 2 >= 1 && has_blink_l) return CMD_BLINK_LEFT;
+            if (dy < 0 && my_y + 2 <= 7 && has_blink_d) return CMD_BLINK_DOWN;
+            if (dy > 0 && my_y - 2 >= 1 && has_blink_u) return CMD_BLINK_UP;
+        }
+        // 걸어서 탈출
+        if (dx < 0 && my_x < 7) return CMD_RIGHT;
+        if (dx > 0 && my_x > 1) return CMD_LEFT;
+        if (dy < 0 && my_y < 7) return CMD_DOWN;
+        if (dy > 0 && my_y > 1) return CMD_UP;
+    }
+
+    // 2-3. 독형 상대: 거리 2 유지하며 원거리 공격
+    if (g_opp_is_poisoner && dist == 1 && my_hp >= 3) {
+        // 후퇴하면서 공격 준비
+        if (has_blink && my_mp >= 1) {
+            if (dx < 0 && my_x + 2 <= 7 && has_blink_r) return CMD_BLINK_RIGHT;
+            if (dx > 0 && my_x - 2 >= 1 && has_blink_l) return CMD_BLINK_LEFT;
+            if (dy < 0 && my_y + 2 <= 7 && has_blink_d) return CMD_BLINK_DOWN;
+            if (dy > 0 && my_y - 2 >= 1 && has_blink_u) return CMD_BLINK_UP;
+        }
     }
 
     /* =====================================================================================
-     * PHASE 2: 예측 기반 선제 공격
+     * [3] 즉시 킬각 - 모든 경우의 수
      * ===================================================================================== */
-    // 상대가 예측 위치로 이동할 것이라고 가정하고 선제 공격
+
+    // HP 1 상대 즉사
+    if (opp_hp == 1) {
+        if (dist == 1) return CMD_ATTACK;
+        if (dist == 2 && has_range && my_mp >= 1) return CMD_RANGE_ATTACK;
+        if (h_line && has_h && my_mp >= 3) return CMD_H_ATTACK;
+        if (v_line && has_v && my_mp >= 3) return CMD_V_ATTACK;
+        // 이동 후 공격
+        if (dist == 2) {
+            if (abs_dx > abs_dy) {
+                if (dx > 0) return CMD_RIGHT;
+                if (dx < 0) return CMD_LEFT;
+            } else {
+                if (dy > 0) return CMD_DOWN;
+                if (dy < 0) return CMD_UP;
+            }
+        }
+    }
+
+    // HP 2 상대 강공격으로 처치
+    if (opp_hp == 2) {
+        if (dist == 1 && has_strike && my_mp >= 2) return CMD_STRIKE;
+        if (h_line && has_h && my_mp >= 3) return CMD_H_ATTACK;
+        if (v_line && has_v && my_mp >= 3) return CMD_V_ATTACK;
+        // 라인 맞추기
+        if (has_h && my_mp >= 3 && !same_row && abs_dy <= 2) {
+            if (dy > 0) return CMD_DOWN;
+            if (dy < 0) return CMD_UP;
+        }
+        if (has_v && my_mp >= 3 && !same_col && abs_dx <= 2) {
+            if (dx > 0) return CMD_RIGHT;
+            if (dx < 0) return CMD_LEFT;
+        }
+    }
+
+    /* =====================================================================================
+     * [4] HP별 완전 분기 - 생존
+     * ===================================================================================== */
+
+    // HP 1: 긴급
+    if (my_hp == 1) {
+        // 동귀어진 가능하면 공격
+        if (opp_hp == 1 && dist == 1) return CMD_ATTACK;
+        if (opp_hp <= 2 && dist == 1 && has_strike && my_mp >= 2) return CMD_STRIKE;
+        // 회복
+        if (has_heal_all && my_mp >= 3) return CMD_HEAL_ALL;
+        if (my_mp >= 1) return CMD_HEAL;
+        // 탈출
+        if (has_blink && my_mp >= 1) {
+            int b = get_safe_blink_away(my_x, my_y, opp_x, opp_y, has_blink_u, has_blink_d, has_blink_l, has_blink_r);
+            if (b > 0) return b;
+        }
+        if (dx < 0 && my_x < 7) return CMD_RIGHT;
+        if (dx > 0 && my_x > 1) return CMD_LEFT;
+        if (dy < 0 && my_y < 7) return CMD_DOWN;
+        if (dy > 0 && my_y > 1) return CMD_UP;
+        return CMD_REST;
+    }
+
+    // HP 2: 위험
+    if (my_hp == 2) {
+        // 상대 HP 낮으면 공격
+        if (opp_hp == 1 && dist == 1) return CMD_ATTACK;
+        if (opp_hp == 1 && dist == 2 && has_range && my_mp >= 1) return CMD_RANGE_ATTACK;
+        if (opp_hp == 1 && h_line && has_h && my_mp >= 3) return CMD_H_ATTACK;
+        if (opp_hp == 1 && v_line && has_v && my_mp >= 3) return CMD_V_ATTACK;
+        if (opp_hp == 2 && dist == 1 && has_strike && my_mp >= 2) return CMD_STRIKE;
+        if (opp_hp == 2 && dist == 1) return CMD_ATTACK;
+        // 거리 있으면 회복
+        if (dist >= 3 && my_mp >= 1) return CMD_HEAL;
+        // 거리 2면 원거리 공격
+        if (dist == 2 && opp_hp <= 2 && has_range && my_mp >= 1) return CMD_RANGE_ATTACK;
+        if (dist == 2 && h_line && has_h && my_mp >= 3) return CMD_H_ATTACK;
+        if (dist == 2 && v_line && has_v && my_mp >= 3) return CMD_V_ATTACK;
+        // 근접 + 상대 HP 높으면 회피
+        if (dist == 1 && opp_hp >= 3) {
+            if (has_blink && my_mp >= 1) {
+                int b = get_safe_blink_away(my_x, my_y, opp_x, opp_y, has_blink_u, has_blink_d, has_blink_l, has_blink_r);
+                if (b > 0) return b;
+            }
+            if (dx < 0 && my_x < 7) return CMD_RIGHT;
+            if (dx > 0 && my_x > 1) return CMD_LEFT;
+            if (dy < 0 && my_y < 7) return CMD_DOWN;
+            if (dy > 0 && my_y > 1) return CMD_UP;
+        }
+        if (has_heal_all && my_mp >= 3) return CMD_HEAL_ALL;
+        if (my_mp >= 1) return CMD_HEAL;
+    }
+
+    // HP 3
+    if (my_hp == 3) {
+        // 킬각
+        if (opp_hp == 1 && dist == 1) return CMD_ATTACK;
+        if (opp_hp <= 2 && dist == 1 && has_strike && my_mp >= 2) return CMD_STRIKE;
+        if (opp_hp == 1 && dist == 2 && has_range && my_mp >= 1) return CMD_RANGE_ATTACK;
+        if (opp_hp <= 2 && h_line && has_h && my_mp >= 3) return CMD_H_ATTACK;
+        if (opp_hp <= 2 && v_line && has_v && my_mp >= 3) return CMD_V_ATTACK;
+        // 상대 HP 높고 근접 -> 강타 후 거리
+        if (opp_hp >= 4 && dist == 1) {
+            if (has_strike && my_mp >= 2) return CMD_STRIKE;
+            return CMD_ATTACK;
+        }
+        // HP 열세면 회복
+        if (hp_diff <= -2 && dist >= 2 && my_mp >= 1) return CMD_HEAL;
+    }
+
+    /* =====================================================================================
+     * [5] 상대 패턴 맞대응
+     * ===================================================================================== */
+
+    // 공격형: 선제 타격
+    if (opp_history.attack_pattern == 1 && opp_history.consecutive_approach >= 2) {
+        if (dist == 1 && has_strike && my_mp >= 2) return CMD_STRIKE;
+        if (dist == 1) return CMD_ATTACK;
+        if (dist == 2 && has_range && my_mp >= 1) return CMD_RANGE_ATTACK;
+        if (h_line && has_h && my_mp >= 3) return CMD_H_ATTACK;
+        if (v_line && has_v && my_mp >= 3) return CMD_V_ATTACK;
+    }
+
+    // 방어형: 추격
+    if (opp_history.attack_pattern == 2) {
+        if (h_line && has_h && my_mp >= 3) return CMD_H_ATTACK;
+        if (v_line && has_v && my_mp >= 3) return CMD_V_ATTACK;
+        if (has_blink && my_mp >= 1 && dist >= 3) {
+            int b = get_safe_blink_toward(my_x, my_y, opp_x, opp_y, has_blink_u, has_blink_d, has_blink_l, has_blink_r);
+            if (b > 0) return b;
+        }
+    }
+
+    // 도주형: 원거리 저격
+    if (opp_history.attack_pattern == 3) {
+        if (h_line && has_h && my_mp >= 3) return CMD_H_ATTACK;
+        if (v_line && has_v && my_mp >= 3) return CMD_V_ATTACK;
+        if (has_blink && my_mp >= 1) {
+            int b = get_safe_blink_toward(my_x, my_y, opp_x, opp_y, has_blink_u, has_blink_d, has_blink_l, has_blink_r);
+            if (b > 0) return b;
+        }
+    }
+
+    /* =====================================================================================
+     * [6] 예측 선제 공격
+     * ===================================================================================== */
     if (opp_history.turn_count >= 2) {
-        // 예측 위치에 H_ATTACK/V_ATTACK 가능하면 선제
-        if (has_h_attack && my_mp >= 3 && my_y == pred_opp_y && abs_val(pred_opp_x - my_x) >= 2) {
+        if (has_h && my_mp >= 3 && my_y == pred_y && abs_val(pred_x - my_x) >= 2) {
             return CMD_H_ATTACK;
         }
-        if (has_v_attack && my_mp >= 3 && my_x == pred_opp_x && abs_val(pred_opp_y - my_y) >= 2) {
+        if (has_v && my_mp >= 3 && my_x == pred_x && abs_val(pred_y - my_y) >= 2) {
             return CMD_V_ATTACK;
         }
     }
 
     /* =====================================================================================
-     * PHASE 3: 맞대응 시스템 (상대 패턴 기반)
-     * ===================================================================================== */
-    int counter = get_counter_attack(my_hp, my_mp, my_x, my_y, opp_hp, opp_x, opp_y, dist,
-                                      has_strike, has_range, has_h_attack, has_v_attack,
-                                      has_blink_u, has_blink_d, has_blink_l, has_blink_r);
-    if (counter > 0) {
-        return counter;
-    }
-
-    /* =====================================================================================
-     * PHASE 4: 위기 상황 대응
-     * ===================================================================================== */
-    int critical_hp = (my_hp <= 1);
-    int danger_hp = (my_hp <= 2);
-    int low_hp = (my_hp <= 3 && hp_diff <= -1);
-
-    // 4-1. 치명적 위기 (HP 1): HEAL_ALL 우선, 없으면 HEAL, 없으면 도주
-    if (critical_hp) {
-        if (has_heal_all && my_mp >= 3) return CMD_HEAL_ALL;
-        if (my_mp >= 1) return CMD_HEAL;
-        // BLINK 도주
-        int blink = get_safe_blink_away(my_x, my_y, opp_x, opp_y,
-                                         has_blink_u, has_blink_d, has_blink_l, has_blink_r);
-        if (blink > 0 && my_mp >= 1) return blink;
-        // 이동 도주
-        if (opp_x < my_x && my_x < 7) return CMD_RIGHT;
-        if (opp_x > my_x && my_x > 1) return CMD_LEFT;
-        if (opp_y < my_y && my_y < 7) return CMD_DOWN;
-        if (opp_y > my_y && my_y > 1) return CMD_UP;
-    }
-
-    // 4-2. 위험 상황 (HP 2): 상황에 따라 공격 or 회복
-    if (danger_hp) {
-        // 상대도 HP 낮으면 공격 우선 (서로 죽음 상황)
-        if (opp_hp <= 2 && dist <= 1) {
-            if (has_strike && my_mp >= 2) return CMD_STRIKE;
-            return CMD_ATTACK;
-        }
-        // 원거리에서 안전하게 회복
-        if (dist >= 3 && my_mp >= 1) return CMD_HEAL;
-        if (has_heal_all && my_mp >= 3) return CMD_HEAL_ALL;
-        if (my_mp >= 1) return CMD_HEAL;
-    }
-
-    // 4-3. 불리한 상황 (HP 3 이하, 열세)
-    if (low_hp) {
-        // 원거리 공격으로 안전하게 데미지
-        if (my_y == opp_y && has_h_attack && my_mp >= 3 && dist >= 2) return CMD_H_ATTACK;
-        if (my_x == opp_x && has_v_attack && my_mp >= 3 && dist >= 2) return CMD_V_ATTACK;
-        // 거리 벌리고 회복
-        if (dist <= 2) {
-            int blink = get_safe_blink_away(my_x, my_y, opp_x, opp_y,
-                                             has_blink_u, has_blink_d, has_blink_l, has_blink_r);
-            if (blink > 0 && my_mp >= 1) return blink;
-        }
-        if (my_mp >= 1 && my_hp < 5) return CMD_HEAL;
-    }
-
-    /* =====================================================================================
-     * PHASE 5: 공격 우세 상황 - 최대 공격력
-     * ===================================================================================== */
-    int advantage = (hp_diff >= 2) || (my_hp >= 4 && opp_hp <= 2);
-
-    if (advantage) {
-        // 5-1. 라인 공격 (최대 데미지)
-        if (my_y == opp_y && has_h_attack && my_mp >= 3) return CMD_H_ATTACK;
-        if (my_x == opp_x && has_v_attack && my_mp >= 3) return CMD_V_ATTACK;
-
-        // 5-2. 근접전 강화
-        if (dist == 1) {
-            if (has_strike && my_mp >= 2) return CMD_STRIKE;
-            return CMD_ATTACK;
-        }
-
-        // 5-3. 거리 2: Range 공격
-        if (dist == 2 && has_range && my_mp >= 1) return CMD_RANGE_ATTACK;
-
-        // 5-4. BLINK로 빠르게 추격
-        if (dist >= 3 && my_mp >= 1 && has_any_blink) {
-            int blink = get_safe_blink_toward(my_x, my_y, opp_x, opp_y,
-                                               has_blink_u, has_blink_d, has_blink_l, has_blink_r);
-            if (blink > 0) return blink;
-        }
-
-        // 5-5. 라인 공격 사정거리로 BLINK
-        if (my_mp >= 1 && has_any_blink && (has_h_attack || has_v_attack)) {
-            int blink = get_blink_to_attack_line(my_x, my_y, opp_x, opp_y,
-                                                  has_blink_u, has_blink_d, has_blink_l, has_blink_r,
-                                                  has_h_attack, has_v_attack);
-            if (blink > 0) return blink;
-        }
-    }
-
-    /* =====================================================================================
-     * PHASE 6: 일반 전투 - 대각선 포지셔닝 포함
+     * [7] 거리별 최강 공격
      * ===================================================================================== */
 
-    // 6-1. 라인 공격 기회
-    if (my_y == opp_y && has_h_attack && my_mp >= 3 && dist >= 2) return CMD_H_ATTACK;
-    if (my_x == opp_x && has_v_attack && my_mp >= 3 && dist >= 2) return CMD_V_ATTACK;
-
-    // 6-2. 근접전 (dist == 1)
+    // dist 1: 근접
     if (dist == 1) {
-        // POISON 사용 (상대 HP 높을 때)
-        if (has_poison && my_mp >= 5 && opp_hp >= 3) return CMD_POISON;
-        // STRIKE 강타
-        if (has_strike && my_mp >= 2 && opp_hp >= 2) return CMD_STRIKE;
-        // 일반 공격
+        if (has_strike && my_mp >= 2) return CMD_STRIKE;
+        if (has_poison && my_mp >= 5 && opp_hp >= 4 && my_hp >= 4 && !g_opp_is_poisoner) {
+            return CMD_POISON;
+        }
         return CMD_ATTACK;
     }
 
-    // 6-3. 거리 2: Range 공격 or 접근
+    // dist 2
     if (dist == 2) {
+        if (h_line && has_h && my_mp >= 3) return CMD_H_ATTACK;
+        if (v_line && has_v && my_mp >= 3) return CMD_V_ATTACK;
         if (has_range && my_mp >= 1) return CMD_RANGE_ATTACK;
-        // 대각선 접근
-        return get_diagonal_move_toward(my_x, my_y, opp_x, opp_y);
+        // 라인 맞추기
+        if (has_h && my_mp >= 3 && !same_row) {
+            if (dy > 0 && my_y < 7) return CMD_DOWN;
+            if (dy < 0 && my_y > 1) return CMD_UP;
+        }
+        if (has_v && my_mp >= 3 && !same_col) {
+            if (dx > 0 && my_x < 7) return CMD_RIGHT;
+            if (dx < 0 && my_x > 1) return CMD_LEFT;
+        }
+        // 접근
+        if (abs_dx >= abs_dy) {
+            if (dx > 0 && my_x < 7) return CMD_RIGHT;
+            if (dx < 0 && my_x > 1) return CMD_LEFT;
+        }
+        if (dy > 0 && my_y < 7) return CMD_DOWN;
+        if (dy < 0 && my_y > 1) return CMD_UP;
     }
 
-    // 6-4. 원거리: 라인 공격 사정거리로 이동 (대각선 포지셔닝)
+    // dist >= 3
     if (dist >= 3) {
-        // 라인 공격 사정거리로 이동 시도
-        int line_move = move_to_attack_position(my_x, my_y, opp_x, opp_y, has_h_attack, has_v_attack);
-        if (line_move > 0) return line_move;
+        // 라인 공격
+        if (h_line && has_h && my_mp >= 3) return CMD_H_ATTACK;
+        if (v_line && has_v && my_mp >= 3) return CMD_V_ATTACK;
 
-        // BLINK로 빠르게 접근
-        if (my_mp >= 1 && has_any_blink) {
-            int blink = get_safe_blink_toward(my_x, my_y, opp_x, opp_y,
-                                               has_blink_u, has_blink_d, has_blink_l, has_blink_r);
-            if (blink > 0) return blink;
+        // 라인 맞추기 이동
+        if (has_h && my_mp >= 3 && !same_row) {
+            if (dy > 0 && my_y < 7) return CMD_DOWN;
+            if (dy < 0 && my_y > 1) return CMD_UP;
+        }
+        if (has_v && my_mp >= 3 && !same_col) {
+            if (dx > 0 && my_x < 7) return CMD_RIGHT;
+            if (dx < 0 && my_x > 1) return CMD_LEFT;
         }
 
-        // MP 부족하면 REST
-        if (my_mp < 2 && dist >= 4) return CMD_REST;
+        // BLINK 접근
+        if (has_blink && my_mp >= 1) {
+            int b = get_blink_to_attack_line(my_x, my_y, opp_x, opp_y, has_blink_u, has_blink_d, has_blink_l, has_blink_r, has_h, has_v);
+            if (b > 0) return b;
+            b = get_safe_blink_toward(my_x, my_y, opp_x, opp_y, has_blink_u, has_blink_d, has_blink_l, has_blink_r);
+            if (b > 0) return b;
+        }
 
-        // 대각선 추격
-        return get_diagonal_move_toward(my_x, my_y, opp_x, opp_y);
+        // MP 회복
+        if (my_mp <= 1 && dist >= 4) return CMD_REST;
+
+        // 접근
+        if (abs_dx >= abs_dy) {
+            if (dx > 0 && my_x < 7) return CMD_RIGHT;
+            if (dx < 0 && my_x > 1) return CMD_LEFT;
+        }
+        if (dy > 0 && my_y < 7) return CMD_DOWN;
+        if (dy < 0 && my_y > 1) return CMD_UP;
     }
 
     /* =====================================================================================
-     * PHASE 7: 측면 공격 포지션 (Flanking)
+     * [8] MP 관리
      * ===================================================================================== */
-    // 가까이 있지만 직선이 아닐 때 -> 측면 위치 확보
-    if (dist <= 2 && my_y != opp_y && my_x != opp_x) {
-        int flank = get_flanking_position(my_x, my_y, opp_x, opp_y);
-        if (flank > 0) return flank;
+    if (my_mp <= 1 && my_hp >= 4 && dist >= 3) {
+        return CMD_REST;
     }
 
     /* =====================================================================================
-     * PHASE 8: 기본 추격 (대각선 이동)
+     * [9] 기본 추격
      * ===================================================================================== */
-    return get_diagonal_move_toward(my_x, my_y, opp_x, opp_y);
+    if (dx > 0 && my_x < 7) return CMD_RIGHT;
+    if (dx < 0 && my_x > 1) return CMD_LEFT;
+    if (dy > 0 && my_y < 7) return CMD_DOWN;
+    if (dy < 0 && my_y > 1) return CMD_UP;
+
+    return CMD_REST;
 }
 
 /* =================================================================================================
