@@ -1,4 +1,7 @@
 #pragma once
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <d3d11.h>
 #include <DirectXMath.h>
 using namespace DirectX;
