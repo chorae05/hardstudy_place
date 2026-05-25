@@ -1,13 +1,10 @@
 #pragma once
+#include "Shader.h"   // unique_ptr<Shader> 소멸자가 완전한 타입 요구
 #include "Player.h"
 #include "Enemy.h"
 #include "Bubble.h"
 #include <vector>
 #include <memory>
-
-class Shader;
-struct ID3D11DeviceContext;
-struct ID3D11Device;
 
 class GameManager {
 public:
